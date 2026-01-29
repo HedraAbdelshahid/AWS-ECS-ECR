@@ -40,3 +40,117 @@ terraform apply
 The Terraform configuration is intentionally minimal (provider + default VPC/subnets). To fully deploy a production-ready service you may need to add resources such as an ECR repository, IAM roles with least privilege, ALB/Target Group, and more.
 
 See `ecs-fargate/README.md` for details.
+
+Next steps — ALB + Auto-scaling
+
+Architecture (internet-facing):
+
+Internet
+	 |
+	 ALB (public)
+	 |
+	 Target Group (port 80)
+	 |
+	 ECS Service (Fargate tasks, private subnets)
+
+What to change in Terraform
+- Create an Application Load Balancer (`aws_lb`) in public subnets and allow HTTP (port 80).
+- Create an `aws_lb_target_group` for port 80 with a suitable health check.
+- Create an `aws_lb_listener` that forwards to the target group.
+- Update the `aws_ecs_service` `network_configuration` to use private subnets and remove `assign_public_ip = true`.
+- Attach the ECS tasks to the target group by adding `load_balancer` block or via `service_registries`, depending on your setup.
+
+Get the ALB DNS name
+
+After creating the ALB you can fetch its public DNS with:
+
+```bash
+aws elbv2 describe-load-balancers \
+	--names hello-ecs-alb \
+	--query 'LoadBalancers[0].DNSName' \
+	--output text
+```
+
+Autoscaling
+- Add `aws_appautoscaling_target` and `aws_appautoscaling_policy` to scale the ECS service (task count) based on CPU or custom metrics.
+
+Minimal Terraform snippets (add to `ecs-fargate/*.tf`):
+
+ALB + TG + Listener example:
+
+```hcl
+resource "aws_lb" "alb" {
+	name               = "hello-alb"
+	internal           = false
+	load_balancer_type = "application"
+	subnets            = data.aws_subnets.default.ids
+}
+
+resource "aws_lb_target_group" "tg" {
+	name     = "hello-tg"
+	port     = 80
+	protocol = "HTTP"
+	vpc_id   = data.aws_vpc.default.id
+	health_check {
+		path                = "/"
+		interval            = 30
+		healthy_threshold   = 2
+		unhealthy_threshold = 2
+	}
+}
+
+resource "aws_lb_listener" "http" {
+	load_balancer_arn = aws_lb.alb.arn
+	port              = "80"
+	protocol          = "HTTP"
+	default_action {
+		type             = "forward"
+		target_group_arn = aws_lb_target_group.tg.arn
+	}
+}
+```
+
+ECS service changes (use private subnets):
+
+```hcl
+network_configuration {
+	subnets          = data.aws_subnets.default.ids # replace with private subnet ids
+	security_groups  = [aws_security_group.ecs.id]
+	assign_public_ip = false
+}
+
+load_balancer {
+	target_group_arn = aws_lb_target_group.tg.arn
+	container_name   = "hello"
+	container_port   = 80
+}
+```
+
+App autoscaling example:
+
+```hcl
+resource "aws_appautoscaling_target" "ecs_target" {
+	max_capacity       = 4
+	min_capacity       = 1
+	resource_id        = "service/${aws_ecs_cluster.this.name}/${aws_ecs_service.this.name}"
+	scalable_dimension = "ecs:service:DesiredCount"
+	service_namespace  = "ecs"
+}
+
+resource "aws_appautoscaling_policy" "cpu_scale_out" {
+	name               = "cpu-scale-out"
+	policy_type        = "TargetTrackingScaling"
+	resource_id        = aws_appautoscaling_target.ecs_target.resource_id
+	scalable_dimension = aws_appautoscaling_target.ecs_target.scalable_dimension
+	service_namespace  = aws_appautoscaling_target.ecs_target.service_namespace
+
+	target_tracking_scaling_policy_configuration {
+		predefined_metric_specification {
+			predefined_metric_type = "ECSServiceAverageCPUUtilization"
+		}
+		target_value = 60.0
+	}
+}
+```
+
+If you'd like, I can add `ecs-fargate/alb.tf` and `ecs-fargate/autoscaling.tf` with these snippets and adjust `main.tf` to use private subnets. Say the word and I'll scaffold them.

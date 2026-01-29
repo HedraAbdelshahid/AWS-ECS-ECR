@@ -74,6 +74,17 @@ aws elbv2 describe-load-balancers \
 Autoscaling
 - Add `aws_appautoscaling_target` and `aws_appautoscaling_policy` to scale the ECS service (task count) based on CPU or custom metrics.
 
+Production-ready notes (what this repo now implements)
+
+- `main.tf` references `aws_vpc.this` and separates public/private subnets for correct network placement.
+- The ALB (`aws_lb`) is deployed into public subnets (internet-facing) and forwards to a target group on port 80.
+- ECS Fargate tasks run in private subnets without public IPs; tasks are registered with the ALB target group so they receive traffic.
+- A NAT gateway provides outbound internet access from private subnets so tasks can pull container images from ECR or other registries.
+- Autoscaling is configured via `aws_appautoscaling_target` and `aws_appautoscaling_policy` to adjust `desired_count` automatically.
+
+Before applying in a new account, verify that private subnets have a route to a NAT gateway in a public subnet (or add an appropriate NAT resource).
+
+
 Minimal Terraform snippets (add to `ecs-fargate/*.tf`):
 
 ALB + TG + Listener example:

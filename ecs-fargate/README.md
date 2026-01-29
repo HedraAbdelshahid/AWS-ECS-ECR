@@ -71,3 +71,17 @@ aws elbv2 describe-load-balancers \
 	--output text
 ```
 
+
+Production-ready notes (what this scaffold now implements)
+
+- `main.tf` in this folder references `aws_vpc.this` and distinguishes public and private subnets.
+- The ALB is created in public subnets (internet-facing) and forwards HTTP traffic to the target group.
+- ECS tasks run in private subnets (no public IP) and are registered with the ALB target group.
+- A NAT gateway (in a public subnet) allows tasks in private subnets to pull images from ECR or access the internet.
+- App autoscaling is included using `aws_appautoscaling_target` and `aws_appautoscaling_policy`.
+
+Checklist before `terraform apply` in a new environment:
+- Ensure public and private subnets exist and are referenced correctly (or add subnet resources).
+- Ensure a NAT gateway and proper route tables are present so private subnets have outbound internet access.
+- Confirm IAM roles/policies needed by ECS tasks and task execution are present or created.
+
